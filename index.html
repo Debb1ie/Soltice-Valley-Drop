@@ -1,0 +1,1108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Solstice Valley</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0f;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    font-family: 'Courier New', monospace;
+    overflow: hidden;
+  }
+  #gameWrapper {
+    position: relative;
+    image-rendering: pixelated;
+  }
+  canvas {
+    display: block;
+    image-rendering: pixelated;
+    cursor: crosshair;
+  }
+  #ui {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+  }
+  #hud {
+    position: absolute;
+    top: 10px; left: 10px;
+    color: #fff;
+    font-size: 13px;
+    text-shadow: 1px 1px 0 #000, -1px 1px 0 #000, 1px -1px 0 #000, -1px -1px 0 #000;
+    line-height: 1.7;
+    display: none;
+  }
+  #dialogue {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(20,15,10,0.92);
+    border: 2px solid #c8a45a;
+    border-radius: 4px;
+    padding: 10px 18px;
+    color: #f0e0b0;
+    font-size: 13px;
+    max-width: 340px;
+    text-align: center;
+    display: none;
+    text-shadow: none;
+  }
+  #dialogue .npc-name {
+    color: #f8d070;
+    font-weight: bold;
+    margin-bottom: 4px;
+  }
+</style>
+</head>
+<body>
+<div id="gameWrapper">
+  <canvas id="c"></canvas>
+  <div id="ui">
+    <div id="hud"></div>
+    <div id="dialogue">
+      <div class="npc-name" id="dlgName"></div>
+      <div id="dlgText"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── CONFIG ───────────────────────────────────────────────────────────────────
+const W = 480, H = 320;   // canvas resolution (pixel-art scale)
+const TILE = 16;
+const COLS = W / TILE;    // 30
+const ROWS = H / TILE;    // 20
+const SCALE = Math.floor(Math.min(window.innerWidth / W, window.innerHeight / H));
+
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+canvas.width  = W;
+canvas.height = H;
+canvas.style.width  = W * SCALE + 'px';
+canvas.style.height = H * SCALE + 'px';
+document.getElementById('gameWrapper').style.width  = W * SCALE + 'px';
+document.getElementById('gameWrapper').style.height = H * SCALE + 'px';
+ctx.imageSmoothingEnabled = false;
+
+// ─── STATE ────────────────────────────────────────────────────────────────────
+let state = 'START';  // START | PLAY | OVER
+let score = 0;
+let gameTime = 0;        // 0–1 full day cycle (seconds, 60s = full day)
+const DAY_DURATION = 60; // seconds per full cycle
+let fragments = [];
+let particles = [];
+let dialogueTimer = 0;
+let talkingNPC = null;
+
+// ─── INPUT ────────────────────────────────────────────────────────────────────
+const keys = {};
+document.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  if (state === 'START' && (e.key === ' ' || e.key === 'Enter')) startGame();
+  if (state === 'OVER'  && (e.key === ' ' || e.key === 'Enter')) startGame();
+});
+document.addEventListener('keyup',  e => { keys[e.key] = false; });
+
+// ─── WORLD MAP ────────────────────────────────────────────────────────────────
+// Tile types: 0=grass, 1=path, 2=tree, 3=flower, 4=house, 5=well, 6=water
+const MAP = [
+  [0,0,0,0,0,2,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,2,0,0,0,0,0,0],
+  [0,0,0,0,2,2,0,0,0,3,0,0,0,4,4,4,0,0,0,3,0,2,2,0,0,0,0,0,0,0],
+  [0,0,0,2,0,0,0,0,0,0,0,0,0,4,4,4,0,0,0,0,0,0,0,2,0,0,0,3,0,0],
+  [0,0,3,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0],
+  [0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,4,4,4,0,0,0],
+  [0,3,0,0,4,4,4,0,1,0,0,3,0,0,0,5,0,0,1,0,0,0,0,0,4,4,4,0,3,0],
+  [0,0,0,0,4,4,4,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0],
+  [0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,2],
+  [0,0,2,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,3,0,0,0,0,2,2,0,0],
+  [0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0],
+  [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+  [0,0,0,3,0,0,0,0,0,0,0,0,0,4,4,4,0,0,0,0,0,0,3,0,0,0,0,0,0,0],
+  [2,2,0,0,0,0,0,0,0,0,0,0,0,4,4,4,0,0,0,0,0,0,0,0,0,0,0,0,2,2],
+  [0,0,0,0,0,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0,0],
+  [0,0,0,0,0,0,0,0,0,0,2,2,0,0,0,0,0,2,2,0,0,0,0,0,0,0,0,0,0,0],
+  [0,3,0,0,0,0,0,4,4,4,0,0,0,0,0,0,0,0,0,4,4,4,0,0,0,0,0,0,3,0],
+  [0,0,0,0,0,0,0,4,4,4,0,0,0,0,0,0,0,0,0,4,4,4,0,0,0,0,0,0,0,0],
+  [0,0,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,0,0,0],
+  [0,0,0,0,3,0,0,0,0,0,0,0,3,0,0,0,3,0,0,0,0,3,0,0,0,0,0,0,0,0],
+  [0,0,0,0,0,0,2,2,0,0,0,0,0,0,0,0,0,0,0,0,2,2,0,0,0,0,0,0,0,0],
+];
+
+// ─── PLAYER ───────────────────────────────────────────────────────────────────
+const player = {
+  x: 13 * TILE, y: 10 * TILE, // pixel position
+  vx: 0, vy: 0,
+  speed: 80,   // px/s
+  dir: 2,      // 0=up,1=right,2=down,3=left
+  frame: 0,
+  animTimer: 0,
+  moving: false,
+};
+
+// ─── NPCs ─────────────────────────────────────────────────────────────────────
+const NPC_DATA = [
+  { x: 14*TILE, y: 4*TILE,  name:'Mira',   color:'#e07080', dialogue:[
+    "Have you seen the sun fragments today? They glow so warmly!",
+    "I love how the valley changes at night... so mysterious.",
+    "Collect enough fragments and the Solstice Spirit will bless you!",
+  ]},
+  { x: 5*TILE,  y: 5*TILE,  name:'Brom',   color:'#70a0e0', dialogue:[
+    "*yawns* I only come alive after sunset. Night fragments are mine!",
+    "The well in the square grants wishes on solstice eve, they say.",
+    "Watch your step — the flowers here are ancient and wise.",
+  ]},
+  { x: 25*TILE, y: 5*TILE,  name:'Lyra',   color:'#a070e0', dialogue:[
+    "I've been counting the stars. There are exactly 47 tonight!",
+    "Sun fragments taste like warm honey. Moon fragments like cool silver.",
+    "Welcome to Solstice Valley, traveller! Collect all the fragments!",
+  ]},
+  { x: 14*TILE, y: 11*TILE, name:'Pip',    color:'#70d090', dialogue:[
+    "My shop is... well, it would be a shop if I had a shop.",
+    "I saw a firefly last night. Or was it a moon fragment? Both!",
+    "Keep moving! Fragments respawn if you're quick enough.",
+  ]},
+  { x: 8*TILE,  y: 15*TILE, name:'Cass',  color:'#f0c060', dialogue:[
+    "The day-night balance is everything here in the valley.",
+    "Sun or Moon — both fragments matter! Don't ignore one.",
+    "I heard there's a secret score bonus if you collect both kinds!",
+  ]},
+  { x: 20*TILE, y: 15*TILE, name:'Reed',  color:'#e09040', dialogue:[
+    "Trees are my friends. I talk to them. They don't talk back. Yet.",
+    "The village has been here longer than memory. Cozy, isn't it?",
+    "Fragments of light, fragments of night — this valley holds both.",
+  ]},
+];
+
+let npcs = [];
+
+// ─── FLOWERS ──────────────────────────────────────────────────────────────────
+const FLOWER_COLORS = ['#ff6688','#ffcc44','#aa88ff','#44ddaa','#ff9966'];
+let flowerAnim = 0; // global sway timer
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+function isWalkable(px, py) {
+  const col = Math.floor(px / TILE);
+  const row = Math.floor(py / TILE);
+  if (row < 0 || row >= ROWS || col < 0 || col >= COLS) return false;
+  const t = MAP[row][col];
+  return t !== 2 && t !== 4; // can't walk into trees or houses
+}
+
+function isSolid(tx, ty) {
+  if (ty < 0 || ty >= ROWS || tx < 0 || tx >= COLS) return true;
+  const t = MAP[ty][tx];
+  return t === 2 || t === 4;
+}
+
+// pixel-perfect movement with tile collision
+function movePlayer(dt) {
+  let dx = 0, dy = 0;
+  if (keys['ArrowLeft']  || keys['a'] || keys['A']) dx = -1;
+  if (keys['ArrowRight'] || keys['d'] || keys['D']) dx =  1;
+  if (keys['ArrowUp']    || keys['w'] || keys['W']) dy = -1;
+  if (keys['ArrowDown']  || keys['s'] || keys['S']) dy =  1;
+
+  player.moving = dx !== 0 || dy !== 0;
+  if (!player.moving) return;
+
+  if (dx < 0) player.dir = 3;
+  else if (dx > 0) player.dir = 1;
+  else if (dy < 0) player.dir = 0;
+  else player.dir = 2;
+
+  const spd = player.speed * dt;
+  const nx = player.x + dx * spd;
+  const ny = player.y + dy * spd;
+
+  // Collision check: treat player as 10x10 centered
+  const margin = 4;
+  const left  = nx - margin;
+  const right = nx + margin - 1;
+  const top   = ny - margin;
+  const bot   = ny + margin - 1;
+
+  const canMoveX = (
+    !isSolid(Math.floor(left/TILE),  Math.floor((player.y-margin)/TILE)) &&
+    !isSolid(Math.floor(right/TILE), Math.floor((player.y-margin)/TILE)) &&
+    !isSolid(Math.floor(left/TILE),  Math.floor((player.y+margin-1)/TILE)) &&
+    !isSolid(Math.floor(right/TILE), Math.floor((player.y+margin-1)/TILE))
+  );
+  const canMoveY = (
+    !isSolid(Math.floor((player.x-margin)/TILE), Math.floor(top/TILE)) &&
+    !isSolid(Math.floor((player.x+margin-1)/TILE), Math.floor(top/TILE)) &&
+    !isSolid(Math.floor((player.x-margin)/TILE), Math.floor(bot/TILE)) &&
+    !isSolid(Math.floor((player.x+margin-1)/TILE), Math.floor(bot/TILE))
+  );
+
+  if (canMoveX) player.x = nx;
+  if (canMoveY) player.y = ny;
+  player.x = Math.max(8, Math.min(W - 8, player.x));
+  player.y = Math.max(8, Math.min(H - 8, player.y));
+
+  // animate walk cycle
+  player.animTimer += dt;
+  if (player.animTimer > 0.15) { player.frame = (player.frame + 1) % 4; player.animTimer = 0; }
+}
+
+// ─── FRAGMENT SPAWNING ────────────────────────────────────────────────────────
+function spawnFragment() {
+  const isDay = getDayPhase() === 'day';
+  // find walkable tile
+  let attempts = 0;
+  while (attempts++ < 100) {
+    const tx = 1 + Math.floor(Math.random() * (COLS - 2));
+    const ty = 1 + Math.floor(Math.random() * (ROWS - 2));
+    if (!isSolid(tx, ty)) {
+      fragments.push({
+        x: tx * TILE + 8,
+        y: ty * TILE + 8,
+        type: isDay ? 'sun' : 'moon',
+        bobOffset: Math.random() * Math.PI * 2,
+        collected: false,
+      });
+      return;
+    }
+  }
+}
+
+function getDayPhase() {
+  const t = (gameTime % DAY_DURATION) / DAY_DURATION; // 0..1
+  return t < 0.5 ? 'day' : 'night';
+}
+
+function getDayT() {
+  return (gameTime % DAY_DURATION) / DAY_DURATION; // 0..1
+}
+
+// ─── PARTICLES ────────────────────────────────────────────────────────────────
+function spawnCollectParticles(x, y, isSun) {
+  for (let i = 0; i < 8; i++) {
+    const angle = (Math.PI * 2 * i) / 8;
+    particles.push({
+      x, y,
+      vx: Math.cos(angle) * (20 + Math.random() * 30),
+      vy: Math.sin(angle) * (20 + Math.random() * 30),
+      life: 0.6 + Math.random() * 0.3,
+      maxLife: 0.9,
+      color: isSun ? '#ffd040' : '#aaddff',
+      size: 2 + Math.random() * 2,
+    });
+  }
+}
+
+// ─── DRAWING HELPERS ──────────────────────────────────────────────────────────
+
+// Pixel-font text (uses canvas font, crisp)
+function pxText(text, x, y, color='#fff', size=8) {
+  ctx.font = `${size}px 'Courier New', monospace`;
+  ctx.fillStyle = color;
+  ctx.imageSmoothingEnabled = false;
+  ctx.fillText(text, x, y);
+}
+
+function shadowText(text, x, y, color='#fff', shadow='#000', size=8) {
+  ctx.font = `bold ${size}px 'Courier New', monospace`;
+  ctx.fillStyle = shadow;
+  ctx.fillText(text, x+1, y+1);
+  ctx.fillStyle = color;
+  ctx.fillText(text, x, y);
+}
+
+// Draw an 8x8 sprite from a pixel array (each entry = color string or '' for transparent)
+function drawSprite(grid, px, py, scale=1) {
+  const rows = grid.length;
+  const cols = grid[0].length;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const col = grid[r][c];
+      if (!col) continue;
+      ctx.fillStyle = col;
+      ctx.fillRect(px + c * scale, py + r * scale, scale, scale);
+    }
+  }
+}
+
+// ─── SPRITES (pixel art via arrays) ──────────────────────────────────────────
+const PLAYER_SPRITES = {
+  // down, up, right, left — each 2 frames
+  frames: [
+    // dir=2 down frame0
+    [
+      ['','','','#8b5e3c','#8b5e3c','','',''],
+      ['','','#8b5e3c','#f5c07a','#f5c07a','#8b5e3c','',''],
+      ['','','#8b5e3c','#f5c07a','#f5c07a','#8b5e3c','',''],
+      ['','','','#3a7fd4','#3a7fd4','','',''],
+      ['','','#3a7fd4','#3a7fd4','#3a7fd4','#3a7fd4','',''],
+      ['','','#3a7fd4','#3a7fd4','#3a7fd4','#3a7fd4','',''],
+      ['','','#f5c07a','#2a5ea8','','#2a5ea8','#f5c07a',''],
+      ['','','#c8843c','','','','#c8843c',''],
+    ],
+    // dir=2 down frame1 (walking — shift legs)
+    [
+      ['','','','#8b5e3c','#8b5e3c','','',''],
+      ['','','#8b5e3c','#f5c07a','#f5c07a','#8b5e3c','',''],
+      ['','','#8b5e3c','#f5c07a','#f5c07a','#8b5e3c','',''],
+      ['','','','#3a7fd4','#3a7fd4','','',''],
+      ['','','#3a7fd4','#3a7fd4','#3a7fd4','#3a7fd4','',''],
+      ['','','#3a7fd4','#3a7fd4','#3a7fd4','#3a7fd4','',''],
+      ['','#f5c07a','#2a5ea8','','','','#2a5ea8',''],
+      ['','#c8843c','','','','','','#c8843c'],
+    ],
+  ]
+};
+
+// Draw the player (simple pixel humanoid)
+function drawPlayer(x, y, dir, frame, isNight) {
+  const px = Math.floor(x) - 4;
+  const py = Math.floor(y) - 8;
+
+  // Hair colors by direction
+  const hairCol  = '#8b5e3c';
+  const skinCol  = '#f5c07a';
+  const shirtCol = isNight ? '#5050c0' : '#3a7fd4';
+  const pantsCol = isNight ? '#303080' : '#2a5ea8';
+  const bootCol  = '#c8843c';
+
+  // Walk bob
+  const bob = (frame % 2 === 0) ? 0 : 1;
+
+  // --- head ---
+  ctx.fillStyle = hairCol;
+  ctx.fillRect(px+1, py, 6, 2);
+  ctx.fillStyle = skinCol;
+  ctx.fillRect(px+1, py+2, 6, 4);
+  ctx.fillStyle = hairCol;
+  ctx.fillRect(px+1, py+2, 1, 1);
+  ctx.fillRect(px+6, py+2, 1, 1);
+
+  // eyes
+  ctx.fillStyle = '#333';
+  if (dir === 2) { // down
+    ctx.fillRect(px+2, py+3, 1, 1);
+    ctx.fillRect(px+5, py+3, 1, 1);
+  } else if (dir === 0) { // up — no eyes visible
+    ctx.fillStyle = hairCol;
+    ctx.fillRect(px+1, py+2, 6, 4);
+  } else { // side
+    const ex = dir === 1 ? px+5 : px+2;
+    ctx.fillRect(ex, py+3, 1, 1);
+  }
+
+  // --- body ---
+  ctx.fillStyle = shirtCol;
+  ctx.fillRect(px+1, py+6, 6, 4);
+
+  // arms (animated)
+  ctx.fillStyle = shirtCol;
+  if (frame % 2 === 0) {
+    ctx.fillRect(px,   py+6, 1, 3);
+    ctx.fillRect(px+7, py+6, 1, 3);
+  } else {
+    ctx.fillRect(px,   py+7, 1, 3);
+    ctx.fillRect(px+7, py+7, 1, 3);
+  }
+  ctx.fillStyle = skinCol;
+  if (frame % 2 === 0) {
+    ctx.fillRect(px,   py+9, 1, 1);
+    ctx.fillRect(px+7, py+9, 1, 1);
+  } else {
+    ctx.fillRect(px,   py+10, 1, 1);
+    ctx.fillRect(px+7, py+10, 1, 1);
+  }
+
+  // --- legs ---
+  ctx.fillStyle = pantsCol;
+  if (frame % 2 === 0) {
+    ctx.fillRect(px+2, py+10, 2, 3);
+    ctx.fillRect(px+4, py+10, 2, 3);
+  } else {
+    ctx.fillRect(px+2, py+10, 2, 2);
+    ctx.fillRect(px+4, py+10+1, 2, 2);
+  }
+
+  // boots
+  ctx.fillStyle = bootCol;
+  if (frame % 2 === 0) {
+    ctx.fillRect(px+1, py+13, 3, 2);
+    ctx.fillRect(px+4, py+13, 3, 2);
+  } else {
+    ctx.fillRect(px+1, py+12, 3, 2);
+    ctx.fillRect(px+4, py+13, 3, 2);
+  }
+}
+
+// Draw NPC
+function drawNPC(npc, t, isNight) {
+  const px = Math.floor(npc.x) - 4;
+  const py = Math.floor(npc.y) - 8;
+  const bob = Math.floor(Math.sin(t * 1.5 + npc.x) * 0.7);
+
+  ctx.fillStyle = '#6b3e2c';
+  ctx.fillRect(px+1, py+bob, 6, 3);
+  ctx.fillStyle = '#f5c07a';
+  ctx.fillRect(px+1, py+2+bob, 6, 4);
+  ctx.fillStyle = '#333';
+  ctx.fillRect(px+2, py+3+bob, 1, 1);
+  ctx.fillRect(px+5, py+3+bob, 1, 1);
+  // smile
+  ctx.fillRect(px+3, py+5+bob, 2, 1);
+
+  ctx.fillStyle = npc.color;
+  ctx.fillRect(px+1, py+6, 6, 4);
+  ctx.fillRect(px,   py+7, 1, 3);
+  ctx.fillRect(px+7, py+7, 1, 3);
+
+  ctx.fillStyle = '#8b5e3c';
+  ctx.fillRect(px+2, py+10, 2, 4);
+  ctx.fillRect(px+4, py+10, 2, 4);
+
+  // name tag
+  ctx.font = '6px Courier New';
+  ctx.fillStyle = '#fff';
+  const tw = ctx.measureText(npc.name).width;
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(px + 4 - tw/2 - 1, py - 9, tw + 2, 8);
+  ctx.fillStyle = '#ffd070';
+  ctx.fillText(npc.name, px + 4 - tw/2, py - 2);
+}
+
+// Draw a tree (16px wide, 24px tall rooted at tx,ty)
+function drawTree(tx, ty, isNight) {
+  const trunkColor = '#7a4f2a';
+  const leafColor  = isNight ? '#1a4a2a' : '#2a7a3a';
+  const leafHiCol  = isNight ? '#1e5c2e' : '#35963f';
+  // trunk
+  ctx.fillStyle = trunkColor;
+  ctx.fillRect(tx+5, ty+10, 6, 10);
+  // leaves (3 layers)
+  ctx.fillStyle = leafColor;
+  ctx.fillRect(tx+3, ty+6, 10, 6);
+  ctx.fillRect(tx+1, ty+10, 14, 4);
+  ctx.fillStyle = leafHiCol;
+  ctx.fillRect(tx+4, ty+2, 8, 6);
+  ctx.fillRect(tx+5, ty, 6, 3);
+  // Twinkle on tree tops at night
+  if (isNight) {
+    ctx.fillStyle = 'rgba(180,220,255,0.6)';
+    ctx.fillRect(tx+7, ty, 2, 2);
+  }
+}
+
+// Draw a house (occupies 3×3 tiles = 48x48, drawn at pixel coord)
+function drawHouse(tx, ty, isNight) {
+  const wallCol  = isNight ? '#4a3a5a' : '#d4a97a';
+  const roofCol  = isNight ? '#3a2540' : '#c0504a';
+  const doorCol  = '#6b3e2c';
+  const winCol   = isNight ? '#ffd070' : '#88ccff';
+  const outCol   = '#000';
+
+  // foundation / wall
+  ctx.fillStyle = wallCol;
+  ctx.fillRect(tx, ty+16, 48, 32);
+  ctx.strokeStyle = outCol; ctx.lineWidth = 1;
+  ctx.strokeRect(tx, ty+16, 48, 32);
+
+  // roof
+  ctx.fillStyle = roofCol;
+  ctx.beginPath();
+  ctx.moveTo(tx-2, ty+18);
+  ctx.lineTo(tx+24, ty);
+  ctx.lineTo(tx+50, ty+18);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // door
+  ctx.fillStyle = doorCol;
+  ctx.fillRect(tx+18, ty+32, 12, 16);
+  ctx.strokeRect(tx+18, ty+32, 12, 16);
+  ctx.fillStyle = '#f0d060';
+  ctx.fillRect(tx+28, ty+39, 2, 2);
+
+  // windows
+  ctx.fillStyle = winCol;
+  ctx.fillRect(tx+4,  ty+22, 10, 8);
+  ctx.fillRect(tx+34, ty+22, 10, 8);
+  ctx.strokeStyle = outCol;
+  ctx.strokeRect(tx+4,  ty+22, 10, 8);
+  ctx.strokeRect(tx+34, ty+22, 10, 8);
+  // window cross
+  ctx.beginPath();
+  ctx.moveTo(tx+9,  ty+22); ctx.lineTo(tx+9,  ty+30);
+  ctx.moveTo(tx+4,  ty+26); ctx.lineTo(tx+14, ty+26);
+  ctx.moveTo(tx+39, ty+22); ctx.lineTo(tx+39, ty+30);
+  ctx.moveTo(tx+34, ty+26); ctx.lineTo(tx+44, ty+26);
+  ctx.stroke();
+
+  // chimney smoke at night
+  if (isNight) {
+    ctx.fillStyle = 'rgba(200,180,160,0.3)';
+    ctx.fillRect(tx+36, ty-4, 4, 6);
+    ctx.fillStyle = 'rgba(200,180,160,0.2)';
+    ctx.fillRect(tx+35, ty-8, 6, 4);
+  }
+}
+
+// Draw a well
+function drawWell(tx, ty) {
+  ctx.fillStyle = '#999';
+  ctx.fillRect(tx+2, ty+8, 12, 8);
+  ctx.fillStyle = '#777';
+  ctx.fillRect(tx+3, ty+6, 2, 8);
+  ctx.fillRect(tx+11, ty+6, 2, 8);
+  ctx.fillStyle = '#555';
+  ctx.fillRect(tx+2, ty+5, 12, 3);
+  ctx.fillStyle = '#4488cc';
+  ctx.fillRect(tx+4, ty+9, 8, 5);
+}
+
+// Draw a flower (animated sway)
+function drawFlower(tx, ty, colorIdx, t) {
+  const sway = Math.sin(t * 1.2 + tx * 0.3) * 1.5;
+  const col = FLOWER_COLORS[colorIdx % FLOWER_COLORS.length];
+  // stem
+  ctx.fillStyle = '#3a9a3a';
+  ctx.fillRect(tx + 7 + Math.round(sway*0.3), ty+10, 2, 6);
+  // petals
+  ctx.fillStyle = col;
+  ctx.fillRect(tx+6 + Math.round(sway), ty+7, 4, 2);
+  ctx.fillRect(tx+6 + Math.round(sway), ty+11, 4, 2);
+  ctx.fillRect(tx+4 + Math.round(sway), ty+9, 2, 2);
+  ctx.fillRect(tx+10 + Math.round(sway), ty+9, 2, 2);
+  // center
+  ctx.fillStyle = '#ffe040';
+  ctx.fillRect(tx+6 + Math.round(sway), ty+9, 4, 2);
+}
+
+// Draw a sun fragment
+function drawSunFragment(x, y, t) {
+  const bob = Math.sin(t * 2 + x) * 2;
+  const py  = y + bob;
+  // glow
+  const grd = ctx.createRadialGradient(x, py, 0, x, py, 7);
+  grd.addColorStop(0, 'rgba(255,210,50,0.4)');
+  grd.addColorStop(1, 'rgba(255,200,0,0)');
+  ctx.fillStyle = grd;
+  ctx.beginPath(); ctx.arc(x, py, 7, 0, Math.PI*2); ctx.fill();
+  // diamond shape
+  ctx.fillStyle = '#ffd040';
+  ctx.beginPath();
+  ctx.moveTo(x, py-5);
+  ctx.lineTo(x+3, py);
+  ctx.lineTo(x, py+5);
+  ctx.lineTo(x-3, py);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#ffffa0';
+  ctx.fillRect(x-1, py-2, 2, 4);
+}
+
+// Draw a moon fragment
+function drawMoonFragment(x, y, t) {
+  const bob = Math.sin(t * 1.5 + x) * 2;
+  const py  = y + bob;
+  // glow
+  const grd = ctx.createRadialGradient(x, py, 0, x, py, 7);
+  grd.addColorStop(0, 'rgba(150,210,255,0.4)');
+  grd.addColorStop(1, 'rgba(100,180,255,0)');
+  ctx.fillStyle = grd;
+  ctx.beginPath(); ctx.arc(x, py, 7, 0, Math.PI*2); ctx.fill();
+  // crescent shape
+  ctx.fillStyle = '#aaddff';
+  ctx.beginPath();
+  ctx.arc(x, py, 4, 0, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = '#90c0e0';
+  ctx.beginPath();
+  ctx.arc(x+2, py, 3, 0, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = '#ddeeff';
+  ctx.fillRect(x-1, py-3, 2, 6);
+}
+
+// Sky colors based on time
+function getSkyColor(t) {
+  // t: 0=sunrise, 0.25=noon, 0.5=sunset, 0.75=midnight
+  const stops = [
+    [0.00, [255,190,100]],  // sunrise
+    [0.15, [135,200,250]],  // morning
+    [0.25, [100,180,255]],  // noon
+    [0.40, [150,190,240]],  // afternoon
+    [0.50, [255,120,60]],   // sunset
+    [0.60, [80,50,120]],    // dusk
+    [0.70, [20,15,50]],     // night
+    [0.80, [10,10,35]],     // deep night
+    [0.90, [10,10,35]],     // deep night
+    [1.00, [255,190,100]],  // sunrise again
+  ];
+  for (let i = 0; i < stops.length - 1; i++) {
+    const [t0, c0] = stops[i];
+    const [t1, c1] = stops[i+1];
+    if (t >= t0 && t <= t1) {
+      const f = (t - t0) / (t1 - t0);
+      return [
+        Math.round(c0[0] + (c1[0]-c0[0]) * f),
+        Math.round(c0[1] + (c1[1]-c0[1]) * f),
+        Math.round(c0[2] + (c1[2]-c0[2]) * f),
+      ];
+    }
+  }
+  return [10, 10, 35];
+}
+
+function getLightOverlay(t) {
+  // Returns an rgba string for the night overlay
+  // t: 0=day, 0.5=transition, 1=deep night
+  let alpha = 0;
+  if (t < 0.4) alpha = 0;
+  else if (t < 0.6) alpha = (t - 0.4) / 0.2 * 0.55;
+  else if (t < 0.9) alpha = 0.55;
+  else alpha = 0.55 - (t - 0.9) / 0.1 * 0.55;
+  return alpha;
+}
+
+// Stars
+let stars = [];
+for (let i = 0; i < 60; i++) {
+  stars.push({ x: Math.random() * W, y: Math.random() * (H*0.4), size: Math.random() > 0.8 ? 2 : 1, twinkle: Math.random() * Math.PI * 2 });
+}
+
+function drawStars(t, dayT) {
+  let starAlpha = 0;
+  if (dayT > 0.55) starAlpha = Math.min(1, (dayT - 0.55) / 0.15);
+  if (dayT > 0.95) starAlpha = Math.max(0, 1 - (dayT - 0.95) / 0.05);
+  if (starAlpha <= 0) return;
+
+  for (const s of stars) {
+    const twink = 0.6 + 0.4 * Math.sin(t * 3 + s.twinkle);
+    ctx.fillStyle = `rgba(255,255,255,${starAlpha * twink})`;
+    ctx.fillRect(s.x, s.y, s.size, s.size);
+  }
+}
+
+// Sun and Moon
+function drawCelestialBody(dayT) {
+  // Sun arcs across during day (0..0.5), moon during night (0.5..1)
+  if (dayT < 0.5) {
+    // Sun
+    const angle = (dayT / 0.5) * Math.PI; // 0..π
+    const sx = W * 0.1 + (W * 0.8) * (dayT / 0.5);
+    const sy = H * 0.35 - Math.sin(angle) * H * 0.3;
+    const grd = ctx.createRadialGradient(sx, sy, 0, sx, sy, 14);
+    grd.addColorStop(0, 'rgba(255,230,100,1)');
+    grd.addColorStop(0.6, 'rgba(255,200,0,0.8)');
+    grd.addColorStop(1, 'rgba(255,150,0,0)');
+    ctx.fillStyle = grd;
+    ctx.beginPath(); ctx.arc(sx, sy, 14, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#ffee80';
+    ctx.beginPath(); ctx.arc(sx, sy, 7, 0, Math.PI*2); ctx.fill();
+  } else {
+    // Moon
+    const angle = ((dayT - 0.5) / 0.5) * Math.PI;
+    const mx = W * 0.1 + (W * 0.8) * ((dayT - 0.5) / 0.5);
+    const my = H * 0.35 - Math.sin(angle) * H * 0.3;
+    const grd = ctx.createRadialGradient(mx, my, 0, mx, my, 10);
+    grd.addColorStop(0, 'rgba(220,240,255,0.9)');
+    grd.addColorStop(1, 'rgba(150,180,255,0)');
+    ctx.fillStyle = grd;
+    ctx.beginPath(); ctx.arc(mx, my, 10, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#ddeeff';
+    ctx.beginPath(); ctx.arc(mx, my, 6, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#c0d8ff';
+    ctx.beginPath(); ctx.arc(mx+3, my-2, 5, 0, Math.PI*2); ctx.fill();
+  }
+}
+
+// ─── GAME LOOP ────────────────────────────────────────────────────────────────
+let lastTime = 0;
+let fragSpawnTimer = 0;
+const MAX_FRAGMENTS = 8;
+
+function startGame() {
+  score = 0;
+  gameTime = 0;
+  fragments = [];
+  particles = [];
+  talkingNPC = null;
+  dialogueTimer = 0;
+  player.x = 13 * TILE + 8;
+  player.y = 10 * TILE + 8;
+  player.frame = 0;
+  player.dir = 2;
+
+  // Init NPCs from data
+  npcs = NPC_DATA.map(d => ({ ...d, dlgIdx: 0, talkCooldown: 0 }));
+
+  // Spawn initial fragments
+  for (let i = 0; i < 5; i++) spawnFragment();
+
+  document.getElementById('hud').style.display = 'block';
+  state = 'PLAY';
+}
+
+function update(dt) {
+  if (state !== 'PLAY') return;
+
+  gameTime += dt;
+  const dayT = getDayT();
+  const isNight = dayT >= 0.5;
+
+  // player movement
+  movePlayer(dt);
+
+  // fragment spawning
+  fragSpawnTimer += dt;
+  if (fragSpawnTimer > 3 && fragments.length < MAX_FRAGMENTS) {
+    fragSpawnTimer = 0;
+    spawnFragment();
+  }
+
+  // fragment collection
+  for (const f of fragments) {
+    if (f.collected) continue;
+    const dx = player.x - f.x, dy = player.y - f.y;
+    if (dx*dx + dy*dy < 12*12) {
+      f.collected = true;
+      score += f.type === 'sun' ? 10 : 15;
+      spawnCollectParticles(f.x, f.y, f.type === 'sun');
+    }
+  }
+  fragments = fragments.filter(f => !f.collected);
+
+  // NPC dialogue proximity
+  talkingNPC = null;
+  for (const npc of npcs) {
+    const dx = player.x - npc.x, dy = player.y - npc.y;
+    if (dx*dx + dy*dy < 22*22) {
+      talkingNPC = npc;
+      if (npc.talkCooldown <= 0) {
+        npc.talkCooldown = 4;
+        npc.dlgIdx = (npc.dlgIdx + 1) % npc.dialogue.length;
+        dialogueTimer = 3.5;
+      }
+    }
+    if (npc.talkCooldown > 0) npc.talkCooldown -= dt;
+  }
+
+  if (dialogueTimer > 0) dialogueTimer -= dt;
+  else talkingNPC = null;
+
+  // particles
+  for (const p of particles) {
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vy += 20 * dt; // gravity
+    p.life -= dt;
+  }
+  particles = particles.filter(p => p.life > 0);
+
+  // HUD
+  const phase = isNight ? '🌙 Night' : '☀️ Day';
+  const pct = isNight ? Math.round((dayT - 0.5) * 200) : Math.round(dayT * 200);
+  document.getElementById('hud').innerHTML =
+    `⭐ Score: <b>${score}</b><br>${phase} — ${pct}%`;
+
+  // dialogue display
+  const dlgEl = document.getElementById('dialogue');
+  if (talkingNPC && dialogueTimer > 0) {
+    document.getElementById('dlgName').textContent = talkingNPC.name;
+    document.getElementById('dlgText').textContent  = talkingNPC.dialogue[talkingNPC.dlgIdx];
+    dlgEl.style.display = 'block';
+  } else {
+    dlgEl.style.display = 'none';
+  }
+}
+
+function draw(t) {
+  const dayT   = getDayT();
+  const isNight = dayT >= 0.5;
+  const sky    = getSkyColor(dayT);
+
+  // ── Background sky ──
+  ctx.fillStyle = `rgb(${sky[0]},${sky[1]},${sky[2]})`;
+  ctx.fillRect(0, 0, W, H);
+
+  // Stars
+  drawStars(t, dayT);
+
+  // Sun / Moon
+  drawCelestialBody(dayT);
+
+  // ── Draw tiles ──
+  flowerAnim = t;
+  const flowerMap = {}; // tx_ty → colorIdx
+
+  for (let row = 0; row < ROWS; row++) {
+    for (let col = 0; col < COLS; col++) {
+      const tile = MAP[row][col];
+      const tx = col * TILE, ty = row * TILE;
+
+      if (tile === 0) {
+        // Grass
+        ctx.fillStyle = isNight ? '#1a3a1a' : '#5ab55a';
+        ctx.fillRect(tx, ty, TILE, TILE);
+        // Subtle grass variation
+        if ((col + row) % 3 === 0) {
+          ctx.fillStyle = isNight ? '#1e4220' : '#62c262';
+          ctx.fillRect(tx+4, ty+4, 4, 3);
+        }
+      } else if (tile === 1) {
+        // Path
+        ctx.fillStyle = isNight ? '#5a4a38' : '#c8a060';
+        ctx.fillRect(tx, ty, TILE, TILE);
+        ctx.fillStyle = isNight ? '#4a3a28' : '#b08848';
+        if ((col + row) % 2 === 0) ctx.fillRect(tx+2, ty+2, 4, 4);
+      } else if (tile === 3) {
+        // Grass under flower
+        ctx.fillStyle = isNight ? '#1a3a1a' : '#5ab55a';
+        ctx.fillRect(tx, ty, TILE, TILE);
+        // Mark for drawing later (above grass)
+        const ci = (col * 7 + row * 13) % FLOWER_COLORS.length;
+        flowerMap[`${col}_${row}`] = ci;
+      } else if (tile === 2) {
+        // Grass under tree
+        ctx.fillStyle = isNight ? '#1a3a1a' : '#5ab55a';
+        ctx.fillRect(tx, ty, TILE, TILE);
+      } else if (tile === 4) {
+        // Grass under house
+        ctx.fillStyle = isNight ? '#1a3a1a' : '#5ab55a';
+        ctx.fillRect(tx, ty, TILE, TILE);
+      } else if (tile === 5) {
+        // Well base — grass
+        ctx.fillStyle = isNight ? '#1a3a1a' : '#5ab55a';
+        ctx.fillRect(tx, ty, TILE, TILE);
+      }
+    }
+  }
+
+  // ── Draw flowers ──
+  for (const key in flowerMap) {
+    const [colS, rowS] = key.split('_').map(Number);
+    drawFlower(colS * TILE, rowS * TILE, flowerMap[key], flowerAnim);
+  }
+
+  // ── Draw trees (after ground so they layer correctly) ──
+  for (let row = 0; row < ROWS; row++) {
+    for (let col = 0; col < COLS; col++) {
+      if (MAP[row][col] === 2) {
+        drawTree(col * TILE - 8, row * TILE - 8, isNight);
+      }
+    }
+  }
+
+  // ── Draw houses (3×3 tiles, find top-left corner) ──
+  const drawnHouses = new Set();
+  for (let row = 0; row < ROWS; row++) {
+    for (let col = 0; col < COLS; col++) {
+      if (MAP[row][col] === 4) {
+        // Find top-left of 3x3 block
+        let tlc = col, tlr = row;
+        while (tlc > 0 && MAP[tlr][tlc-1] === 4) tlc--;
+        while (tlr > 0 && MAP[tlr-1][tlc] === 4) tlr--;
+        const hkey = `${tlc}_${tlr}`;
+        if (!drawnHouses.has(hkey)) {
+          drawnHouses.add(hkey);
+          drawHouse(tlc * TILE, tlr * TILE, isNight);
+        }
+      }
+    }
+  }
+
+  // ── Draw well ──
+  for (let row = 0; row < ROWS; row++) {
+    for (let col = 0; col < COLS; col++) {
+      if (MAP[row][col] === 5) drawWell(col * TILE, row * TILE);
+    }
+  }
+
+  // ── Draw fragments ──
+  for (const f of fragments) {
+    if (f.type === 'sun') drawSunFragment(f.x, f.y, t);
+    else drawMoonFragment(f.x, f.y, t);
+  }
+
+  // ── Draw NPCs ──
+  for (const npc of npcs) {
+    drawNPC(npc, t, isNight);
+  }
+
+  // ── Draw player ──
+  drawPlayer(player.x, player.y, player.dir, player.moving ? player.frame : 0, isNight);
+
+  // ── Draw particles ──
+  for (const p of particles) {
+    const alpha = p.life / p.maxLife;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = p.color;
+    ctx.fillRect(Math.floor(p.x), Math.floor(p.y), Math.ceil(p.size), Math.ceil(p.size));
+  }
+  ctx.globalAlpha = 1;
+
+  // ── Night overlay ──
+  const nightAlpha = getLightOverlay(dayT);
+  if (nightAlpha > 0) {
+    ctx.fillStyle = `rgba(0,5,30,${nightAlpha})`;
+    ctx.fillRect(0, 0, W, H);
+    // Player light halo at night
+    const grd = ctx.createRadialGradient(player.x, player.y, 0, player.x, player.y, 40);
+    grd.addColorStop(0, 'rgba(255,230,150,0.25)');
+    grd.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grd;
+    ctx.fillRect(0, 0, W, H);
+    // NPC light halos
+    for (const npc of npcs) {
+      const ng = ctx.createRadialGradient(npc.x, npc.y, 0, npc.x, npc.y, 25);
+      ng.addColorStop(0, 'rgba(200,200,255,0.12)');
+      ng.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = ng;
+      ctx.fillRect(0, 0, W, H);
+    }
+  }
+}
+
+// ── START SCREEN ──
+function drawStart(t) {
+  // Gradient sky
+  const grd = ctx.createLinearGradient(0, 0, 0, H);
+  grd.addColorStop(0, '#1a0a3a');
+  grd.addColorStop(1, '#4a1560');
+  ctx.fillStyle = grd;
+  ctx.fillRect(0, 0, W, H);
+
+  // Stars
+  for (const s of stars) {
+    const twink = 0.5 + 0.5 * Math.sin(t * 2 + s.twinkle);
+    ctx.fillStyle = `rgba(255,255,255,${twink * 0.8})`;
+    ctx.fillRect(s.x, s.y * 1.5, s.size, s.size);
+  }
+
+  // Hills
+  ctx.fillStyle = '#1a3a1a';
+  ctx.beginPath();
+  ctx.moveTo(0, H);
+  ctx.quadraticCurveTo(100, H-70, 200, H-40);
+  ctx.quadraticCurveTo(350, H-90, W, H-50);
+  ctx.lineTo(W, H); ctx.closePath(); ctx.fill();
+
+  // Little houses silhouette
+  ctx.fillStyle = '#0f1f0f';
+  ctx.fillRect(40, H-55, 30, 30);
+  ctx.beginPath(); ctx.moveTo(35, H-55); ctx.lineTo(55, H-75); ctx.lineTo(75, H-55); ctx.closePath(); ctx.fill();
+  ctx.fillRect(370, H-65, 40, 40);
+  ctx.beginPath(); ctx.moveTo(365, H-65); ctx.lineTo(390, H-90); ctx.lineTo(415, H-65); ctx.closePath(); ctx.fill();
+
+  // Title glow
+  const tgrd = ctx.createLinearGradient(W/2-100, 60, W/2+100, 100);
+  tgrd.addColorStop(0, '#ffcc44');
+  tgrd.addColorStop(0.5, '#ffeeaa');
+  tgrd.addColorStop(1, '#ff9944');
+  ctx.font = 'bold 28px Courier New';
+  ctx.fillStyle = 'rgba(255,180,0,0.2)';
+  ctx.fillText('SOLSTICE VALLEY', W/2 - 104, 84);
+  ctx.fillStyle = tgrd;
+  ctx.fillText('SOLSTICE VALLEY', W/2 - 103, 83);
+
+  ctx.font = '10px Courier New';
+  ctx.fillStyle = '#cc99ff';
+  ctx.fillText('A pixel-art day & night adventure', W/2 - 87, 102);
+
+  // Sun & Moon icons
+  ctx.fillStyle = '#ffd040';
+  ctx.beginPath(); ctx.arc(W/2 - 50, 135, 12, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#ddeeff';
+  ctx.beginPath(); ctx.arc(W/2 + 50, 135, 10, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#c0d0ff';
+  ctx.beginPath(); ctx.arc(W/2 + 55, 130, 8, 0, Math.PI*2); ctx.fill();
+
+  ctx.font = '8px Courier New';
+  ctx.fillStyle = '#ffee80';
+  ctx.fillText('☀ Collect Sun Fragments by day', W/2 - 90, 162);
+  ctx.fillStyle = '#aaddff';
+  ctx.fillText('☽ Collect Moon Fragments by night', W/2 - 90, 175);
+  ctx.fillStyle = '#ddd';
+  ctx.fillText('Talk to villagers for hints!', W/2 - 62, 195);
+
+  ctx.font = '8px Courier New';
+  ctx.fillStyle = '#aaa';
+  ctx.fillText('WASD / Arrow Keys to move', W/2 - 64, 220);
+
+  // Blinking prompt
+  if (Math.floor(t * 2) % 2 === 0) {
+    ctx.font = 'bold 10px Courier New';
+    ctx.fillStyle = '#fff';
+    ctx.fillText('— Press SPACE or ENTER to start —', W/2 - 107, 260);
+  }
+
+  ctx.font = '7px Courier New';
+  ctx.fillStyle = '#774';
+  ctx.fillText('Made for June Solstice Game Jam', W/2 - 80, 305);
+}
+
+// ── GAME OVER SCREEN ──
+function drawOver(t) {
+  const grd = ctx.createLinearGradient(0, 0, 0, H);
+  grd.addColorStop(0, '#0a0512');
+  grd.addColorStop(1, '#200820');
+  ctx.fillStyle = grd;
+  ctx.fillRect(0, 0, W, H);
+
+  for (const s of stars) {
+    ctx.fillStyle = `rgba(255,255,255,${0.4 + 0.3 * Math.sin(t * 1.5 + s.twinkle)})`;
+    ctx.fillRect(s.x, s.y * 1.8, s.size, s.size);
+  }
+
+  ctx.font = 'bold 24px Courier New';
+  ctx.fillStyle = '#c060ff';
+  ctx.fillText('SOLSTICE ENDS', W/2 - 88, 100);
+
+  ctx.font = '10px Courier New';
+  ctx.fillStyle = '#ffcc44';
+  ctx.fillText(`Final Score: ${score}`, W/2 - 40, 135);
+
+  let msg = score < 50 ? 'The valley slumbers...' :
+            score < 150 ? 'A promising harvest of light!' :
+            score < 300 ? 'The spirits smile upon you!' :
+                           'Legend of Solstice Valley!';
+  ctx.fillStyle = '#cc99ff';
+  ctx.font = '9px Courier New';
+  ctx.fillText(msg, W/2 - ctx.measureText(msg).width/2, 158);
+
+  if (Math.floor(t * 2) % 2 === 0) {
+    ctx.font = 'bold 10px Courier New';
+    ctx.fillStyle = '#fff';
+    ctx.fillText('— Press SPACE or ENTER to play again —', W/2 - 127, 210);
+  }
+}
+
+function gameLoop(ts) {
+  const t  = ts / 1000;
+  const dt = Math.min(t - lastTime, 0.05);
+  lastTime = t;
+
+  if (state === 'START') {
+    drawStart(t);
+  } else if (state === 'PLAY') {
+    update(dt);
+    draw(t);
+  } else if (state === 'OVER') {
+    drawOver(t);
+  }
+
+  requestAnimationFrame(gameLoop);
+}
+
+// Bootstrap
+document.getElementById('hud').style.display = 'none';
+document.getElementById('dialogue').style.display = 'none';
+requestAnimationFrame(ts => { lastTime = ts / 1000; requestAnimationFrame(gameLoop); });
+</script>
+</body>
+</html>
