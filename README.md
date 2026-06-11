@@ -53,7 +53,7 @@ Built for the **June Solstice Game Jam 2026** as a fully self-contained single-f
 |  **Levelling & Drops** | Defeat enemies for XP, level up to gain max HP and attack power, collect Heart and Crystal drops |
 |  **Fully Responsive** | Adapts seamlessly across desktop (keyboard + overlaid HUD), tablet, and mobile (on-screen d-pad + action buttons, auto-detected by touch support) |
 |  **Particle System** | Hit sparks, dash trails, combo bursts, ambient night fireflies, and a full fireworks finale on victory |
-|  **Screen Shake** | Camera shake on hits, boss spawn, and powerful attacks for satisfying game feel. |
+|  **Screen Shake** | Camera shake on hits, boss spawn, and powerful attacks for satisfying game feel |
 
 ---
 
