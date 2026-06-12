@@ -25,7 +25,7 @@
 ![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)
 ![Game Jam](https://img.shields.io/badge/June%20Solstice-Game%20Jam%202026-ff9940?style=flat-square)
 
-*A pixel-art RPG adventure built entirely in a single HTML file — no frameworks, no build tools, no dependencies*
+*A pixel-art RPG adventure built entirely in a single HTML file — no frameworks, no build tools, no dependencies.*
 
 </div>
 
